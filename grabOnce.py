@@ -8,6 +8,7 @@ import json
 import stat
 import sqlite3
 import time
+import subprocess
 
 class FileHistory(object):
     
@@ -80,11 +81,15 @@ def main():
     #Argument for file history database with a default
     parser.add_argument('--filehistory',dest='filehistory',action='store',metavar='I',help='SQLite database of file history',default='~/.' + os.path.basename(__file__) + '/history.sqlite',nargs=1)
     
-    #Argument for read buffer size
-    parser.add_argument('--buffersize',dest='buffersize',action='store',type=int,metavar='R',help="Number of bytes to read at a time from the remote server",default=65536,nargs=1)
-    
     #Argument for interactive mode
     parser.add_argument('--interactive',dest='interactive',action='store_true',help='Prompt for each file before downloading', default=False)
+    
+    #Argument to specify rsync exectuable
+    parser.add_argument('--with-rsync',dest='rsync',action='store',help='Path to rsync executable',default = '/usr/bin/rsync',nargs=1)
+    
+    #Argument for read buffer size
+    parser.add_argument('--buffersize',dest='buffersize',action='store',type=int,metavar='R',help="Number of bytes to read at a time from the remote server",default=65536,nargs=1)
+
     
     args = parser.parse_args()
     
@@ -227,10 +232,14 @@ def main():
                 if os.path.exists(localFile):
                     sys.stdout.write("Local file already exists, skipping\n")
                     continue
-                try:
-                    fin = sftp.open(remoteFile,'r',args.buffersize)
-                    
-                    with open(localFile,'w+',args.buffersize) as fout:
+                
+                fin = sftp.open(remoteFile,'r',args.buffersize)
+                filesize = fin.stat().st_size
+                
+                #For small files use paramiko
+                if filesize < 4096:
+                    try:
+                        with open(localFile,'w+') as fout:
                             while True:
                                 dataIn = fin.read(args.buffersize)
                                 
@@ -240,12 +249,27 @@ def main():
                                 fout.write(dataIn)
                                 bwm.addBytes(len(dataIn))
                                 sys.stdout.write("Download Rate: " + str(bwm.getRate()) +' B/s \r')
-                                
-                    sys.stdout.write('\n')
-                except paramiko.SFTPError:
-                    sys.stderr.write("Failed while downloading: " + remoteFile + '\n')
-                    os.unlink(localFile)
-                    raise
+                                sys.stdout.write('\n')
+                    except paramiko.SFTPError:
+                        sys.stderr.write("Failed while downloading: " + remoteFile + '\n')
+                        os.unlink(localFile)
+                        raise
+                
+                #Otherwise invoke rsync
+                else:                    
+                    cmd = [args.rsync,'--archive','--verbose','--progress',remoteUser+'@'+args.remoteHost+':' + remoteFile,localFile]
+                    sys.stdout.write('Executing ' + ' '.join(cmd) + '\n')
+                    try:
+                        proc = subprocess.Popen(cmd)
+                    except OSError:
+                        sys.stderr.write("Failed to rsync: " + remoteFile + '\n')
+                        raise
+                    
+                    if 0 != proc.wait():
+                        sys.stderr.write("Rsync failed\n")
+                        
+                        
+                  
             if record:
                 fh.recordFile(remoteHost,remoteFile)
         
