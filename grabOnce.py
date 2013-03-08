@@ -81,7 +81,7 @@ def main():
     parser.add_argument('--filehistory',dest='filehistory',action='store',metavar='I',help='SQLite database of file history',default='~/.' + os.path.basename(__file__) + '/history.sqlite',nargs=1)
     
     #Argument for read buffer size
-    parser.add_argument('--buffersize',dest='buffersize',action='store',type=int,metavar='R',help="Number of bytes to read at a time from the remote server",default=1024,nargs=1)
+    parser.add_argument('--buffersize',dest='buffersize',action='store',type=int,metavar='R',help="Number of bytes to read at a time from the remote server",default=65536,nargs=1)
     
     #Argument for interactive mode
     parser.add_argument('--interactive',dest='interactive',action='store_true',help='Prompt for each file before downloading', default=False)
