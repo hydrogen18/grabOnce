@@ -138,7 +138,7 @@ def main():
         
         #Use the specified values if present
         if hostDict.has_key('port'):
-            remoteHostPort = hostDict['port'].strip()
+            remoteHostPort = int(hostDict['port'].strip())
             
         if hostDict.has_key('user'):
             remoteUser = hostDict['user'].strip()
