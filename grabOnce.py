@@ -13,7 +13,7 @@ class FileHistory(object):
     
     def __init__(self,filename):
         self.db = sqlite3.connect(filename)
-        self.db.execute("CREATE TABLE IF NOT EXISTS fileHistory ( host text, path text )");
+        self.db.execute("CREATE TABLE IF NOT EXISTS fileHistory ( host text NOT NULL, path text  NOT NULL ,PRIMARY KEY(host,path) )");
         
     def hasFile(self,host,file):
         cur = self.db.execute("Select 1 FROM fileHistory where host=? and path=?",(host,file))
