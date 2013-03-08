@@ -231,7 +231,12 @@ def main():
                     fin = sftp.open(remoteFile,'r',args.buffersize)
                     
                     with open(localFile,'w+',args.buffersize) as fout:
-                            for dataIn in fin.read(args.buffersize):
+                            while True:
+                                dataIn = fin.read(args.buffersize)
+                                
+                                if len(dataIn) == 0:
+                                    break
+                                    
                                 fout.write(dataIn)
                                 bwm.addBytes(len(dataIn))
                                 sys.stdout.write("Download Rate: " + str(bwm.getRate()) +' B/s \r')
