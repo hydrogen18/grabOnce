@@ -1,0 +1,9 @@
+{ "hosts" :
+	{
+    "myRemoteServer" : 
+	{
+		"remote" : "/home/user/linuxISOs",
+		"local" : "/home/user/allYourLinux"
+	}
+    }
+}
