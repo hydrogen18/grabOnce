@@ -79,7 +79,6 @@ Dependencies
 # Python Modules
 
 * sqlite3 - for manipulating the local database of downloaded file
-* paramiko - for listing files on the remote server and downloading small files
 
 # Command line executables
 
