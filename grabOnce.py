@@ -189,8 +189,11 @@ def main():
         sys.exit(1)
 
     remoteFiles = stdout.split('\0')
+    
+    codec = 'utf-8'
+
     #eliminate empty lines, happens at the end
-    remoteFiles = ( remoteFile for remoteFile in remoteFiles if len(remoteFile) > 0 )
+    remoteFiles = ( remoteFile.decode(codec) for remoteFile in remoteFiles if len(remoteFile) > 0 )
 
     localFiles = ( os.path.join(localDir,remoteFile.replace(remoteDir + '/','')) for remoteFile in remoteFiles)
     
