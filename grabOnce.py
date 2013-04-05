@@ -12,19 +12,44 @@ import subprocess
 
 class FileHistory(object):
     
-    def __init__(self,filename):
+    def __init__(self,filename,host):
         self.db = sqlite3.connect(filename)
         self.db.execute("CREATE TABLE IF NOT EXISTS fileHistory ( host text NOT NULL, path text  NOT NULL ,PRIMARY KEY(host,path) )");
         
-    def hasFile(self,host,file):
-        cur = self.db.execute("Select 1 FROM fileHistory where host=? and path=?",(host,file))
+        self.host = host
+        
+    def hasFile(self,file):
+        cur = self.db.execute("Select 1 FROM fileHistory where host=? and path=?",(self.host,file))
         
         return cur.fetchone() != None
         
-    def recordFile(self,host,file):
-        self.db.execute("INSERT INTO fileHistory (host,path) VALUES (?,?)",(host,file))
+    def recordFile(self,file):
+        self.db.execute("INSERT INTO fileHistory (host,path) VALUES (?,?)",(self.host,file))
         self.db.commit()
-        pass
+        
+    def __iter__(self):
+		
+		cur = self.db.execute("Select path FROM fileHistory where host=:host",{"host":self.host})
+		
+		class CursorWrapper(object):
+			def __init__(self,cursor):
+				self.cursor = cursor
+				
+			def next(self):
+				result = self.cursor.fetchone()
+				if result == None:
+					raise StopIteration()
+					
+				path, = result
+				return path
+			def __del__(self):
+				self.cursor.close()
+		
+		return CursorWrapper(cur)
+		
+    def __del__(self):
+        self.db.close()
+		
 
 class BandwidthMeter(object):
     
@@ -90,36 +115,54 @@ def main():
     #Argument for read buffer size
     parser.add_argument('--buffersize',dest='buffersize',action='store',type=int,metavar='R',help="Number of bytes to read at a time from the remote server",default=65536,nargs=1)
 
+    #Add a command for listing downloaded files
+    parser.add_argument('--downloaded',dest='showDownloaded',action='store_true',help='Show all downloaded files for the specified host and exit',default=False)
     
     args = parser.parse_args()
+
+    args.filehistory = os.path.expanduser(args.filehistory)
+ 
+     #Set some sensible defaults for connection settings
+    remoteHost = args.remoteHost
+    remoteHostKey = None
+    remoteHostPort = 22
+    remoteUser = args.remoteUser
     
+    #Open the file history for this host
+    try:
+        fh = FileHistory(args.filehistory,remoteHost)
+    except:
+        sys.stderr.write("Error opening sqlite database: " + args.filehistory + '\n')
+        raise
+        
+    #Check to see if the user just wanted to see downloaded files
+    if args.showDownloaded:
+		for file in fh:
+			print file
+		sys.exit(0)
+	
+	#load the sync configuration file
     args.syncFile = os.path.expanduser(args.syncFile)
+    #Check for existence, fail otherwise
     if not os.path.exists(args.syncFile):
         sys.stderr.write("Can't find synchronization file: " + args.syncFile + '\n')
         sys.exit(1)
-        
+
     try:
         syncConfig = json.load(open(args.syncFile,'r'))
     except:
         sys.stderr.write("Can't parse synchronization file: " + args.syncFile + '\n')
         raise
     
+    #check to make sure the required key is present 
     if not syncConfig.has_key("hosts"):
         sys.stderr.write("Synchronziation file missing hosts entry")
         sys.exit(1)
-        
+    
+    #Make sure it is the correct type    
     if not isinstance(syncConfig['hosts'],type(dict())):
         sys.stderr.write("Synchronization file hosts entry should be a dictionary")
         sys.exit(1)
-        
-    args.filehistory = os.path.expanduser(args.filehistory)
-    
-    try:
-        fh = FileHistory(args.filehistory)
-    except:
-        sys.stderr.write("Error opening sqlite database: " + args.filehistory + '\n')
-        raise
-        
     
     config = paramiko.SSHConfig()
     
@@ -127,12 +170,6 @@ def main():
     args.configFile = os.path.expanduser(args.configFile)
     if os.path.exists(args.configFile):
         config.parse(open(args.configFile,'r'))
-    
-    #Set some sensible defaults for connection settings
-    remoteHost = args.remoteHost
-    remoteHostKey = None
-    remoteHostPort = 22
-    remoteUser = args.remoteUser
     
     #If a configuration file entry present for this host, then use it
     if  len(config.lookup(remoteHost))!=0:
@@ -158,6 +195,7 @@ def main():
             #TODO - DSA Key?
     
     #Make sure the sync file has an entry for this host
+    
     if not syncConfig['hosts'].has_key(args.remoteHost):
         sys.stderr.write("Synchronization file does not have a host entry for: " + args.remoteHost +'\n')
         sys.exit(1)
@@ -168,12 +206,14 @@ def main():
         
     remoteDir = syncConfig['hosts'][args.remoteHost]['remote']
     
+    #If a local directory is not specified, use the same as the remote
+    #directory
     if syncConfig['hosts'][args.remoteHost].has_key('local'):
         localDir = syncConfig['hosts'][args.remoteHost]['local']
     else:
         localDir = remoteDir
     
-    #Create the transport layer, this does not connection
+    #Create the transport layer, this does not open the connection
     tport = paramiko.Transport((remoteHost,remoteHostPort))
     
     #Connect and authenticate
@@ -206,7 +246,7 @@ def main():
                     
     
     for remoteFile, localFile in sync(sftp,remoteDir,localDir):
-        if not fh.hasFile(remoteHost,remoteFile):   
+        if not fh.hasFile(remoteFile):   
             sys.stdout.write (remoteFile + ' ->' + localFile +'\n')
 
             download = True
@@ -258,10 +298,8 @@ def main():
                 #Otherwise invoke rsync
                 else:                    
                     r = remoteUser+'@'+args.remoteHost+':' + remoteFile
-                    #r = r.replace( ' ', '\ ')
-                    #r = r.replace('(' , '\(')
-                    #r = r.replace(')', '\)')
-                    cmd = [args.rsync,'-s','--archive','--verbose','--progress', r ,  localFile  ]
+
+                    cmd = [args.rsync,'-s','--partial','--archive','--verbose','--progress', r ,  localFile  ]
                     sys.stdout.write('Executing ' + ' '.join(cmd) + '\n')
                     try:
                         proc = subprocess.Popen(cmd)
@@ -275,7 +313,9 @@ def main():
                         
                   
             if record:
-                fh.recordFile(remoteHost,remoteFile)
+                fh.recordFile(remoteFile)
+    sftp.close()
+    tport.close()   
         
 if __name__ == "__main__":
     main()
