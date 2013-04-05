@@ -258,8 +258,10 @@ def main():
                 #Otherwise invoke rsync
                 else:                    
                     r = remoteUser+'@'+args.remoteHost+':' + remoteFile
-                    r = r.replace( ' ', '\ ')
-                    cmd = [args.rsync,'--archive','--verbose','--progress', r ,  localFile  ]
+                    #r = r.replace( ' ', '\ ')
+                    #r = r.replace('(' , '\(')
+                    #r = r.replace(')', '\)')
+                    cmd = [args.rsync,'-s','--archive','--verbose','--progress', r ,  localFile  ]
                     sys.stdout.write('Executing ' + ' '.join(cmd) + '\n')
                     try:
                         proc = subprocess.Popen(cmd)
