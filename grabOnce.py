@@ -1,14 +1,13 @@
-import paramiko
 import sys
 import argparse
 import logging
 import os
-import getpass
 import json
 import stat
 import sqlite3
 import time
 import subprocess
+import itertools
 
 class FileHistory(object):
     
@@ -49,19 +48,6 @@ class FileHistory(object):
 		
     def __del__(self):
         self.db.close()
-		
-
-class BandwidthMeter(object):
-    
-    def __init__(self):
-        self.startTime = time.time()
-        self.bytes = 0
-        
-    def addBytes(self,bytes):
-        self.bytes += bytes
-        
-    def getRate(self):
-        return float(self.bytes)/(time.time() - self.startTime)
 
 def prompt(prompt,default,permitted):
     if default not in permitted:
@@ -85,6 +71,21 @@ def prompt(prompt,default,permitted):
         
     return retval
 
+def rsync(local,remote):
+    r = args.remoteHost+':'+remoteFile
+
+    cmd = [args.rsync,'-s','--partial','--archive','--verbose','--progress', r ,  localFile  ]
+    sys.stdout.write('Executing ' + ' '.join(cmd) + '\n')
+    try:
+        proc = subprocess.Popen(cmd)
+    except OSError:
+        sys.stderr.write("Failed to rsync: " + remoteFile + '\n')
+        raise
+    
+    if 0 != proc.wait():
+        raise Exception("Rsync failed\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Retrieve files from an sftp server, but only once.')
     
@@ -96,9 +97,6 @@ def main():
     
     #Argument for the default config file, use the most probable location
     parser.add_argument('--configFile',dest='configFile',action='store',metavar='F',help='OpenSSH style config file to use',default='~/.ssh/config',nargs=1)
-    
-    #Argument for the remote user, default to current username
-    parser.add_argument('--remoteUser',dest='remoteUser',action='store',metavar='U',help='User to authenticate as',default=username,nargs=1)
     
     #Argument for the sync file with a default
     parser.add_argument('--syncfile',dest='syncFile',action='store',metavar='S',help='Synchronization configuration file',default='~/.' + os.path.basename(__file__) + '/sync.json',nargs=1)
@@ -118,19 +116,14 @@ def main():
     #Add a command for listing downloaded files
     parser.add_argument('--downloaded',dest='showDownloaded',action='store_true',help='Show all downloaded files for the specified host and exit',default=False)
     
+    global args
     args = parser.parse_args()
 
     args.filehistory = os.path.expanduser(args.filehistory)
  
-     #Set some sensible defaults for connection settings
-    remoteHost = args.remoteHost
-    remoteHostKey = None
-    remoteHostPort = 22
-    remoteUser = args.remoteUser
-    
     #Open the file history for this host
     try:
-        fh = FileHistory(args.filehistory,remoteHost)
+        fh = FileHistory(args.filehistory,args.remoteHost)
     except:
         sys.stderr.write("Error opening sqlite database: " + args.filehistory + '\n')
         raise
@@ -164,38 +157,6 @@ def main():
         sys.stderr.write("Synchronization file hosts entry should be a dictionary")
         sys.exit(1)
     
-    config = paramiko.SSHConfig()
-    
-    #If a config file exists, parse it
-    args.configFile = os.path.expanduser(args.configFile)
-    if os.path.exists(args.configFile):
-        config.parse(open(args.configFile,'r'))
-    
-    #If a configuration file entry present for this host, then use it
-    if  len(config.lookup(remoteHost))!=0:
-        hostDict = config.lookup(remoteHost)
-        
-        #Get the actual hostname
-        remoteHost = hostDict['hostname']
-        
-        #Use the specified values if present
-        if hostDict.has_key('port'):
-            remoteHostPort = int(hostDict['port'].strip())
-            
-        if hostDict.has_key('user'):
-            remoteUser = hostDict['user'].strip()
-            
-        if hostDict.has_key('identityfile'):
-            remoteHostKey = os.path.expanduser(hostDict['identityfile']).strip()
-            
-            if not os.path.exists(remoteHostKey):
-                sys.stderr.write("Can't find key file " + remoteHostKey + " for host " + remoteHost + '\n')
-                sys.exit(1)
-            remoteHostKey = paramiko.RSAKey.from_private_key_file(remoteHostKey)
-            #TODO - DSA Key?
-    
-    #Make sure the sync file has an entry for this host
-    
     if not syncConfig['hosts'].has_key(args.remoteHost):
         sys.stderr.write("Synchronization file does not have a host entry for: " + args.remoteHost +'\n')
         sys.exit(1)
@@ -204,7 +165,7 @@ def main():
         sys.stderr.write("Synchronization file does not specify remote directory for: " + args.remoteHost + '\n')
         sys.exit(1)
         
-    remoteDir = syncConfig['hosts'][args.remoteHost]['remote']
+    remoteDir = os.path.normpath(syncConfig['hosts'][args.remoteHost]['remote'])
     
     #If a local directory is not specified, use the same as the remote
     #directory
@@ -213,39 +174,27 @@ def main():
     else:
         localDir = remoteDir
     
-    #Create the transport layer, this does not open the connection
-    tport = paramiko.Transport((remoteHost,remoteHostPort))
+    localDir = os.path.normpath(localDir)
     
-    #Connect and authenticate
-    if remoteHostKey:
-        tport.connect(username = remoteUser, pkey = remoteHostKey)
-    else:
-        password = getpass.getpass("Password:")
-        tport.connect(username = remoteUser, password = password)
+    cmd = ['ssh', args.remoteHost,"find " + remoteDir + " -type f -print0"]
+    try:
+        proc = subprocess.Popen(cmd,stdout=subprocess.PIPE,bufsize=-1)
+        stdout,_ = proc.communicate()
+    except OSError:
+        sys.stderr.write("Failed to retrieve remote host file listing\n")
+        raise
+		
+    if proc.returncode != 0:
+        sys.stderr.write("Failed to retrieve remote host file listing\n")
+        sys.exit(1)
+
+    remoteFiles = stdout.split('\0')
+    #eliminate empty lines, happens at the end
+    remoteFiles = ( remoteFile for remoteFile in remoteFiles if len(remoteFile) > 0 )
+
+    localFiles = ( os.path.join(localDir,remoteFile.replace(remoteDir + '/','')) for remoteFile in remoteFiles)
     
-    sftp = paramiko.SFTPClient.from_transport(tport)
-            
-    def sync(sftp,remoteDir,localDir):
-        try:
-            entries = sftp.listdir_attr(remoteDir)
-        except:
-            sys.stderr.write("Failed to retrieve remote directory listing\n")
-            raise
-            
-        for entry in entries:
-            if stat.S_ISDIR(entry.st_mode):
-                newRemote = os.path.join(remoteDir,entry.filename)
-                newLocal = os.path.join(localDir,entry.filename)
-                for x in sync(sftp,newRemote,newLocal):
-                    yield x
-            elif stat.S_ISREG(entry.st_mode):
-                remoteFile = os.path.join(remoteDir,entry.filename)
-                localFile = os.path.join(localDir,entry.filename)
-                
-                yield remoteFile,localFile
-                    
-    
-    for remoteFile, localFile in sync(sftp,remoteDir,localDir):
+    for localFile,remoteFile in itertools.izip(localFiles,remoteFiles):
         if not fh.hasFile(remoteFile):   
             sys.stdout.write (remoteFile + ' ->' + localFile +'\n')
 
@@ -262,60 +211,10 @@ def main():
                     record = False
                 
             if download:     
-                bwm = BandwidthMeter()
-                
-                containingDirectory,_ = os.path.split(localFile)
-                
-                if not os.path.exists(containingDirectory):
-                    os.makedirs(containingDirectory)
-                
-                if os.path.exists(localFile):
-                    sys.stdout.write("Local file already exists, skipping\n")
-                    continue
-                
-                fin = sftp.open(remoteFile,'r',args.buffersize)
-                filesize = fin.stat().st_size
-                
-                #For small files use paramiko
-                if filesize < 4096:
-                    try:
-                        with open(localFile,'w+') as fout:
-                            while True:
-                                dataIn = fin.read(args.buffersize)
-                                
-                                if len(dataIn) == 0:
-                                    break
-                                    
-                                fout.write(dataIn)
-                                bwm.addBytes(len(dataIn))
-                                sys.stdout.write("Download Rate: " + str(bwm.getRate()) +' B/s \r')
-                                sys.stdout.write('\n')
-                    except paramiko.SFTPError:
-                        sys.stderr.write("Failed while downloading: " + remoteFile + '\n')
-                        os.unlink(localFile)
-                        raise
-                
-                #Otherwise invoke rsync
-                else:                    
-                    r = remoteUser+'@'+args.remoteHost+':' + remoteFile
-
-                    cmd = [args.rsync,'-s','--partial','--archive','--verbose','--progress', r ,  localFile  ]
-                    sys.stdout.write('Executing ' + ' '.join(cmd) + '\n')
-                    try:
-                        proc = subprocess.Popen(cmd)
-                    except OSError:
-                        sys.stderr.write("Failed to rsync: " + remoteFile + '\n')
-                        raise
-                    
-                    if 0 != proc.wait():
-                        raise Exception("Rsync failed\n")
-                        
-                        
-                  
+                rsync(localFile,remoteFile)
+      
             if record:
                 fh.recordFile(remoteFile)
-    sftp.close()
-    tport.close()   
         
 if __name__ == "__main__":
     main()
