@@ -193,9 +193,10 @@ def main():
     codec = 'utf-8'
 
     #eliminate empty lines, happens at the end
-    remoteFiles = ( remoteFile.decode(codec) for remoteFile in remoteFiles if len(remoteFile) > 0 )
+    remoteFiles = [ remoteFile.decode(codec) for remoteFile in remoteFiles if len(remoteFile) > 0 ]
 
-    localFiles = ( os.path.join(localDir,remoteFile.replace(remoteDir + '/','')) for remoteFile in remoteFiles)
+    localFiles = [ os.path.join(localDir,remoteFile.replace(remoteDir + '/','')) for remoteFile in remoteFiles]
+
     
     for localFile,remoteFile in itertools.izip(localFiles,remoteFiles):
         if not fh.hasFile(remoteFile):   
