@@ -71,7 +71,7 @@ def prompt(prompt,default,permitted):
         
     return retval
 
-def rsync(local,remote):
+def rsync(localFile,remoteFile):
     r = args.remoteHost+':'+remoteFile
 
     cmd = [args.rsync,'-s','--partial','--archive','--verbose','--progress', r ,  localFile  ]
