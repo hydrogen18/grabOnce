@@ -215,6 +215,10 @@ def main():
                     record = False
                 
             if download:     
+                containingDir, _ = os.path.split(localFile)
+                if not os.path.exists(containingDir):
+                    os.makedirs(containingDir)
+
                 rsync(localFile,remoteFile)
       
             if record:
